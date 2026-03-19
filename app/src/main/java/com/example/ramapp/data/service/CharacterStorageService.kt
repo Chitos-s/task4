@@ -16,12 +16,18 @@ class CharacterStorageService @Inject constructor(
     
     suspend fun getStoredCharacters(filters: CharacterFilters): List<Character> {
         val filterHash = generateFilterHash(filters)
-        return storedCharacterDao.getStoredCharacters(filterHash).map { it.toCharacter() }
+        val expirationTime = System.currentTimeMillis() - STORAGE_DURATION_MS
+        return storedCharacterDao.getStoredCharacters(filterHash)
+            .filter { it.storedAt > expirationTime }
+            .map { it.toCharacter() }
     }
     
     suspend fun getCharactersForPage(filters: CharacterFilters, page: Int): List<Character> {
         val filterHash = generateFilterHash(filters)
-        return storedCharacterDao.getCharactersForPage(filterHash, page).map { it.toCharacter() }
+        val expirationTime = System.currentTimeMillis() - STORAGE_DURATION_MS
+        return storedCharacterDao.getCharactersForPage(filterHash, page)
+            .filter { it.storedAt > expirationTime }
+            .map { it.toCharacter() }
     }
 
     suspend fun getMaxStoredPage(filters: CharacterFilters): Int {
@@ -52,13 +58,15 @@ class CharacterStorageService @Inject constructor(
             locationName = character.locationName,
             episodeCount = character.episodeCount,
             filterHash = filterHash,
-            page = page
+            page = page,
+            storedAt = System.currentTimeMillis()  // явно обновляем время при каждом сохранении
         )
         storedCharacterDao.saveCharacter(entity)
     }
     
     suspend fun saveCharacters(characters: List<Character>, filters: CharacterFilters, page: Int) {
         val filterHash = generateFilterHash(filters)
+        val currentTime = System.currentTimeMillis()
         val entities = characters.map { character ->
             StoredCharacterEntity(
                 id = character.id,
@@ -72,7 +80,8 @@ class CharacterStorageService @Inject constructor(
                 locationName = character.locationName,
                 episodeCount = character.episodeCount,
                 filterHash = filterHash,
-                page = page
+                page = page,
+                storedAt = currentTime  // все персонажи в наборе сохраняют текущее время
             )
         }
         storedCharacterDao.saveCharacters(entities)

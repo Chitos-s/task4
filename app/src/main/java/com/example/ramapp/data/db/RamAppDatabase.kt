@@ -9,7 +9,7 @@ import com.example.ramapp.data.db.entity.FilterStateEntity
 
 @Database(
     entities = [StoredCharacterEntity::class, FilterStateEntity::class],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class RamAppDatabase : RoomDatabase() {

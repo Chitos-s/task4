@@ -3,9 +3,11 @@ package com.example.ramapp.data.db.entity
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
-@Entity(tableName = "stored_characters")
+@Entity(
+    tableName = "stored_characters",
+    primaryKeys = ["id", "filterHash", "page"]
+)
 data class StoredCharacterEntity(
-    @PrimaryKey
     val id: Int,
     val name: String,
     val status: String,

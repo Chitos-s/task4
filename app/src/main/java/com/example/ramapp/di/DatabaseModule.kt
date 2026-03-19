@@ -24,7 +24,8 @@ object DatabaseModule {
         context,
         RamAppDatabase::class.java,
         "ram_app_database"
-    ).build()
+    ).fallbackToDestructiveMigration()
+    .build()
     
     @Singleton
     @Provides

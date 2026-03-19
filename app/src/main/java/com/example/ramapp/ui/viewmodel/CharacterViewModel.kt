@@ -37,6 +37,7 @@ class CharacterViewModel @Inject constructor(
     var selectedFilters by mutableStateOf(CharacterFilters())
         private set
     private var prefetchJob: Job? = null
+    private var currentRequestJob: Job? = null
 
     init {
         restoreState()
@@ -58,9 +59,16 @@ class CharacterViewModel @Inject constructor(
 
     fun loadCharacters(page: Int = 1, preferStorage: Boolean = true, forceRefresh: Boolean = false) {
         currentPage = page
-        viewModelScope.launch {
+        
+        // Отмена предыдущего запроса при новом запросе
+        currentRequestJob?.cancel()
+        
+        // Snapshot фильтров для избежания race condition
+        val filterSnapshot = selectedFilters
+        
+        currentRequestJob = viewModelScope.launch {
             if (preferStorage && !forceRefresh) {
-                val storedItems = storageService.getCharactersForPage(selectedFilters, page)
+                val storedItems = storageService.getCharactersForPage(filterSnapshot, page)
                 if (storedItems.isNotEmpty()) {
                     listState = ListUiState.Content(
                         items = storedItems,
@@ -78,11 +86,11 @@ class CharacterViewModel @Inject constructor(
             listState = ListUiState.Loading
 
             try {
-                val (items, pagination) = getCharactersUseCase(page, selectedFilters)
+                val (items, pagination) = getCharactersUseCase(page, filterSnapshot)
                 storageService.clearExpiredData()
-                storageService.saveCharacters(items, selectedFilters, page)
+                storageService.saveCharacters(items, filterSnapshot, page)
                 totalPages = pagination.totalPages.coerceAtLeast(1)
-                filterStateService.saveFilterState(selectedFilters, page, totalPages)
+                filterStateService.saveFilterState(filterSnapshot, page, totalPages)
                 listState = ListUiState.Content(
                     items = items,
                     pagination = pagination.copy(totalPages = totalPages)
@@ -91,13 +99,14 @@ class CharacterViewModel @Inject constructor(
                 if (page == 1 && pagination.totalPages > 1) {
                     startPrefetchRemainingPages(
                         totalPages = pagination.totalPages,
-                        filters = selectedFilters
+                        filters = filterSnapshot
                     )
                 }
             } catch (e: HttpException) {
                 if (e.code() == 404) {
+                    // 404 = результаты не найдены по фильтру (валидный ответ)
+                    // Не сохраняем как последнее состояние, чтобы не потерять предыдущий успешный фильтр
                     totalPages = 1
-                    filterStateService.saveFilterState(selectedFilters, page, totalPages)
                     listState = ListUiState.Content(
                         items = emptyList(),
                         pagination = PaginationInfo(
@@ -108,7 +117,7 @@ class CharacterViewModel @Inject constructor(
                         )
                     )
                 } else {
-                    val storedItems = storageService.getCharactersForPage(selectedFilters, page)
+                    val storedItems = storageService.getCharactersForPage(filterSnapshot, page)
                     if (storedItems.isNotEmpty()) {
                         listState = ListUiState.Content(
                             items = storedItems,
@@ -126,7 +135,7 @@ class CharacterViewModel @Inject constructor(
                     }
                 }
             } catch (e: Exception) {
-                val storedItems = storageService.getCharactersForPage(selectedFilters, page)
+                val storedItems = storageService.getCharactersForPage(filterSnapshot, page)
                 if (storedItems.isNotEmpty()) {
                     listState = ListUiState.Content(
                         items = storedItems,
@@ -151,11 +160,15 @@ class CharacterViewModel @Inject constructor(
             prefetchJob?.cancel()
             val previousFilters = selectedFilters
             if (previousFilters != filters) {
-                storageService.clearAllData()
-                totalPages = 1
+                // Меняем фильтр и восстанавливаем totalPages на основе Room для нового фильтра
+                selectedFilters = filters
+                val maxPage = storageService.getMaxStoredPage(filters)
+                totalPages = maxPage.coerceAtLeast(1)  // минимум 1
+            } else {
+                selectedFilters = filters
             }
-            selectedFilters = filters
-            loadCharacters(1, preferStorage = false, forceRefresh = true)
+            // preferStorage = true чтобы при ошибке сети использовать кэш
+            loadCharacters(1, preferStorage = true, forceRefresh = false)
         }
     }
 
