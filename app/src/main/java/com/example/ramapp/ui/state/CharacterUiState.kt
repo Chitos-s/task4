@@ -5,6 +5,7 @@ import com.example.ramapp.domain.model.PaginationInfo
 
 sealed interface ListUiState {
     data object Loading : ListUiState
+    data object Empty : ListUiState
     data class Content(
         val items: List<Character>,
         val pagination: PaginationInfo

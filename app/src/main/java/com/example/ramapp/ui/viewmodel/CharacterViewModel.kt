@@ -1,21 +1,21 @@
 package com.example.ramapp.ui.viewmodel
 
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import com.example.ramapp.domain.model.CharacterFilters
-import com.example.ramapp.domain.model.PaginationInfo
-import com.example.ramapp.domain.usecase.GetCharactersUseCase
-import com.example.ramapp.domain.usecase.GetCharacterDetailUseCase
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import com.example.ramapp.data.service.CharacterStorageService
 import com.example.ramapp.data.service.FilterStateService
+import com.example.ramapp.domain.model.CharacterFilters
+import com.example.ramapp.domain.model.PaginationInfo
+import com.example.ramapp.domain.usecase.GetCharacterDetailUseCase
+import com.example.ramapp.domain.usecase.GetCharactersUseCase
 import com.example.ramapp.ui.state.DetailUiState
 import com.example.ramapp.ui.state.ListUiState
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.isActive
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
@@ -36,22 +36,24 @@ class CharacterViewModel @Inject constructor(
     private var totalPages by mutableIntStateOf(1)
     var selectedFilters by mutableStateOf(CharacterFilters())
         private set
-    private var prefetchJob: Job? = null
     private var currentRequestJob: Job? = null
 
     init {
         restoreState()
     }
-    
+
     private fun restoreState() {
         viewModelScope.launch {
             val savedState = filterStateService.getFilterState()
             if (savedState != null) {
-                selectedFilters = savedState.filters
+                selectedFilters = normalizeFilters(savedState.filters)
                 currentPage = savedState.page
                 totalPages = savedState.totalPages.coerceAtLeast(1)
                 loadCharacters(savedState.page)
             } else {
+                selectedFilters = CharacterFilters()
+                currentPage = 1
+                totalPages = 1
                 loadCharacters()
             }
         }
@@ -59,97 +61,75 @@ class CharacterViewModel @Inject constructor(
 
     fun loadCharacters(page: Int = 1, preferStorage: Boolean = true, forceRefresh: Boolean = false) {
         currentPage = page
-        
-        // Отмена предыдущего запроса при новом запросе
         currentRequestJob?.cancel()
-        
-        // Snapshot фильтров для избежания race condition
-        val filterSnapshot = selectedFilters
-        
+        val filterSnapshot = normalizeFilters(selectedFilters)
+        selectedFilters = filterSnapshot
+
         currentRequestJob = viewModelScope.launch {
-            if (preferStorage && !forceRefresh) {
-                val storedItems = storageService.getCharactersForPage(filterSnapshot, page)
-                if (storedItems.isNotEmpty()) {
-                    listState = ListUiState.Content(
-                        items = storedItems,
-                        pagination = PaginationInfo(
-                            currentPage = page,
-                            totalPages = totalPages,
-                            hasNext = page < totalPages,
-                            hasPrev = page > 1
-                        )
-                    )
-                    return@launch
-                }
+            val storedItems = if (preferStorage && !forceRefresh) {
+                storageService.getCharactersForPage(filterSnapshot, page)
+            } else {
+                emptyList()
             }
 
-            listState = ListUiState.Loading
+            if (storedItems.isNotEmpty()) {
+                val storedTotalPages = storageService.getMaxStoredPage(filterSnapshot)
+                    .coerceAtLeast(totalPages)
+                    .coerceAtLeast(1)
+                totalPages = storedTotalPages
+                listState = ListUiState.Content(
+                    items = storedItems,
+                    pagination = PaginationInfo(
+                        currentPage = page,
+                        totalPages = storedTotalPages,
+                        hasNext = page < storedTotalPages,
+                        hasPrev = page > 1
+                    )
+                )
+            } else {
+                listState = ListUiState.Loading
+            }
 
             try {
                 val (items, pagination) = getCharactersUseCase(page, filterSnapshot)
                 storageService.clearExpiredData()
                 storageService.saveCharacters(items, filterSnapshot, page)
                 totalPages = pagination.totalPages.coerceAtLeast(1)
-                filterStateService.saveFilterState(filterSnapshot, page, totalPages)
+                if (hasActiveFilters(filterSnapshot)) {
+                    filterStateService.saveFilterState(filterSnapshot, page, totalPages)
+                } else {
+                    filterStateService.clearFilterState()
+                }
                 listState = ListUiState.Content(
                     items = items,
                     pagination = pagination.copy(totalPages = totalPages)
                 )
-
-                if (page == 1 && pagination.totalPages > 1) {
-                    startPrefetchRemainingPages(
-                        totalPages = pagination.totalPages,
-                        filters = filterSnapshot
-                    )
-                }
             } catch (e: HttpException) {
                 if (e.code() == 404) {
-                    // 404 = результаты не найдены по фильтру (валидный ответ)
-                    // Не сохраняем как последнее состояние, чтобы не потерять предыдущий успешный фильтр
                     totalPages = 1
-                    listState = ListUiState.Content(
-                        items = emptyList(),
-                        pagination = PaginationInfo(
-                            currentPage = page,
-                            totalPages = 1,
-                            hasNext = false,
-                            hasPrev = false
-                        )
-                    )
-                } else {
-                    val storedItems = storageService.getCharactersForPage(filterSnapshot, page)
-                    if (storedItems.isNotEmpty()) {
-                        listState = ListUiState.Content(
+                    listState = if (storedItems.isNotEmpty()) {
+                        ListUiState.Content(
                             items = storedItems,
                             pagination = PaginationInfo(
                                 currentPage = page,
                                 totalPages = totalPages,
-                                hasNext = page < totalPages,
+                                hasNext = false,
                                 hasPrev = page > 1
                             )
                         )
                     } else {
-                        listState = ListUiState.Error(
-                            "Не удалось загрузить список. Попробуйте еще раз."
-                        )
+                        ListUiState.Empty
+                    }
+                } else {
+                    if (storedItems.isEmpty()) {
+                        showCachedPageOrError(filterSnapshot, page)
                     }
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                val storedItems = storageService.getCharactersForPage(filterSnapshot, page)
-                if (storedItems.isNotEmpty()) {
-                    listState = ListUiState.Content(
-                        items = storedItems,
-                        pagination = PaginationInfo(
-                            currentPage = page,
-                            totalPages = totalPages,
-                            hasNext = page < totalPages,
-                            hasPrev = page > 1
-                        )
-                    )
-                } else {
-                    listState = ListUiState.Error(
-                        "Не удалось загрузить список. Попробуйте еще раз."
-                    )
+                if (storedItems.isEmpty()) {
+                    showCachedPageOrError(filterSnapshot, page)
                 }
             }
         }
@@ -157,17 +137,13 @@ class CharacterViewModel @Inject constructor(
 
     fun applyFilters(filters: CharacterFilters) {
         viewModelScope.launch {
-            prefetchJob?.cancel()
-            val previousFilters = selectedFilters
-            if (previousFilters != filters) {
-                // Меняем фильтр и восстанавливаем totalPages на основе Room для нового фильтра
-                selectedFilters = filters
-                val maxPage = storageService.getMaxStoredPage(filters)
-                totalPages = maxPage.coerceAtLeast(1)  // минимум 1
-            } else {
-                selectedFilters = filters
+            val normalizedFilters = normalizeFilters(filters)
+            selectedFilters = normalizedFilters
+            currentPage = 1
+            totalPages = storageService.getMaxStoredPage(normalizedFilters).coerceAtLeast(1)
+            if (!hasActiveFilters(normalizedFilters)) {
+                filterStateService.clearFilterState()
             }
-            // preferStorage = true чтобы при ошибке сети использовать кэш
             loadCharacters(1, preferStorage = true, forceRefresh = false)
         }
     }
@@ -194,6 +170,8 @@ class CharacterViewModel @Inject constructor(
                 val character = getCharacterDetailUseCase(id)
                 detailState = DetailUiState.Content(character)
                 storageService.saveCharacter(character, selectedFilters, currentPage)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 val storedCharacter = storageService.getStoredCharacterById(id)
                 if (storedCharacter != null) {
@@ -207,20 +185,42 @@ class CharacterViewModel @Inject constructor(
         }
     }
 
-    private fun startPrefetchRemainingPages(totalPages: Int, filters: CharacterFilters) {
-        prefetchJob?.cancel()
-        prefetchJob = viewModelScope.launch {
-            for (page in 2..totalPages) {
-                if (!isActive) return@launch
-                if (selectedFilters != filters) return@launch
-                try {
-                    val (items, _) = getCharactersUseCase(page, filters)
-                    storageService.saveCharacters(items, filters, page)
-                    filterStateService.saveFilterState(filters, currentPage, totalPages)
-                } catch (_: Exception) {
-                    return@launch
-                }
-            }
+    private suspend fun showCachedPageOrError(filters: CharacterFilters, page: Int) {
+        val storedItems = storageService.getCharactersForPage(filters, page)
+        if (storedItems.isNotEmpty()) {
+            listState = ListUiState.Content(
+                items = storedItems,
+                pagination = PaginationInfo(
+                    currentPage = page,
+                    totalPages = totalPages,
+                    hasNext = page < totalPages,
+                    hasPrev = page > 1
+                )
+            )
+        } else {
+            listState = ListUiState.Error(
+                "Не удалось загрузить список. Попробуйте еще раз."
+            )
         }
+    }
+
+    private fun normalizeFilters(filters: CharacterFilters): CharacterFilters {
+        fun normalize(value: String?): String? = value?.trim()?.takeIf { it.isNotEmpty() }
+
+        return CharacterFilters(
+            name = normalize(filters.name),
+            status = normalize(filters.status),
+            species = normalize(filters.species),
+            type = normalize(filters.type),
+            gender = normalize(filters.gender)
+        )
+    }
+
+    private fun hasActiveFilters(filters: CharacterFilters): Boolean {
+        return filters.name != null ||
+            filters.status != null ||
+            filters.species != null ||
+            filters.type != null ||
+            filters.gender != null
     }
 }

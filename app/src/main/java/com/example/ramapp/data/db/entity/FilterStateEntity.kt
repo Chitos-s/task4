@@ -6,7 +6,7 @@ import androidx.room.PrimaryKey
 @Entity(tableName = "filter_state")
 data class FilterStateEntity(
     @PrimaryKey
-    val id: Int = 1, // Всегда одна запись с текущим состоянием фильтров
+    val id: Int = 1,
     val name: String?,
     val status: String?,
     val species: String?,

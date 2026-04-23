@@ -9,43 +9,48 @@ import javax.inject.Inject
 class CharacterStorageService @Inject constructor(
     private val storedCharacterDao: StoredCharacterDao
 ) {
-    
+
     companion object {
-        private const val STORAGE_DURATION_MS = 24 * 60 * 60 * 1000L // 24 hours
+        private const val STORAGE_DURATION_MS = 24 * 60 * 60 * 1000L
     }
-    
+
     suspend fun getStoredCharacters(filters: CharacterFilters): List<Character> {
-        val filterHash = generateFilterHash(filters)
+        clearExpiredData()
+        val filterKey = generateFilterKey(filters)
         val expirationTime = System.currentTimeMillis() - STORAGE_DURATION_MS
-        return storedCharacterDao.getStoredCharacters(filterHash)
+        return storedCharacterDao.getStoredCharacters(filterKey)
             .filter { it.storedAt > expirationTime }
             .map { it.toCharacter() }
     }
-    
+
     suspend fun getCharactersForPage(filters: CharacterFilters, page: Int): List<Character> {
-        val filterHash = generateFilterHash(filters)
+        clearExpiredData()
+        val filterKey = generateFilterKey(filters)
         val expirationTime = System.currentTimeMillis() - STORAGE_DURATION_MS
-        return storedCharacterDao.getCharactersForPage(filterHash, page)
+        return storedCharacterDao.getCharactersForPage(filterKey, page)
             .filter { it.storedAt > expirationTime }
             .map { it.toCharacter() }
     }
 
     suspend fun getMaxStoredPage(filters: CharacterFilters): Int {
-        val filterHash = generateFilterHash(filters)
-        return storedCharacterDao.getMaxStoredPage(filterHash)
+        clearExpiredData()
+        val filterKey = generateFilterKey(filters)
+        return storedCharacterDao.getMaxStoredPage(filterKey)
     }
 
     suspend fun getStoredCharacter(id: Int, filters: CharacterFilters): Character? {
-        val filterHash = generateFilterHash(filters)
-        return storedCharacterDao.getStoredCharacter(filterHash, id)?.toCharacter()
+        clearExpiredData()
+        val filterKey = generateFilterKey(filters)
+        return storedCharacterDao.getStoredCharacter(filterKey, id)?.toCharacter()
     }
 
     suspend fun getStoredCharacterById(id: Int): Character? {
+        clearExpiredData()
         return storedCharacterDao.getStoredCharacterById(id)?.toCharacter()
     }
-    
+
     suspend fun saveCharacter(character: Character, filters: CharacterFilters, page: Int) {
-        val filterHash = generateFilterHash(filters)
+        val filterKey = generateFilterKey(filters)
         val entity = StoredCharacterEntity(
             id = character.id,
             name = character.name,
@@ -57,15 +62,15 @@ class CharacterStorageService @Inject constructor(
             originName = character.originName,
             locationName = character.locationName,
             episodeCount = character.episodeCount,
-            filterHash = filterHash,
+            filterHash = filterKey,
             page = page,
-            storedAt = System.currentTimeMillis()  // явно обновляем время при каждом сохранении
+            storedAt = System.currentTimeMillis()
         )
         storedCharacterDao.saveCharacter(entity)
     }
-    
+
     suspend fun saveCharacters(characters: List<Character>, filters: CharacterFilters, page: Int) {
-        val filterHash = generateFilterHash(filters)
+        val filterKey = generateFilterKey(filters)
         val currentTime = System.currentTimeMillis()
         val entities = characters.map { character ->
             StoredCharacterEntity(
@@ -79,39 +84,38 @@ class CharacterStorageService @Inject constructor(
                 originName = character.originName,
                 locationName = character.locationName,
                 episodeCount = character.episodeCount,
-                filterHash = filterHash,
+                filterHash = filterKey,
                 page = page,
-                storedAt = currentTime  // все персонажи в наборе сохраняют текущее время
+                storedAt = currentTime
             )
         }
         storedCharacterDao.saveCharacters(entities)
     }
-    
+
     suspend fun clearExpiredData() {
         val expirationTime = System.currentTimeMillis() - STORAGE_DURATION_MS
         storedCharacterDao.clearExpiredData(expirationTime)
     }
-    
+
     suspend fun clearDataByFilter(filters: CharacterFilters) {
-        val filterHash = generateFilterHash(filters)
-        storedCharacterDao.clearDataByFilter(filterHash)
+        val filterKey = generateFilterKey(filters)
+        storedCharacterDao.clearDataByFilter(filterKey)
     }
 
     suspend fun clearAllData() {
         storedCharacterDao.clearAllData()
     }
-    
-    private fun generateFilterHash(filters: CharacterFilters): String {
-        val parts = listOf(
-            filters.name ?: "",
-            filters.status ?: "",
-            filters.species ?: "",
-            filters.type ?: "",
-            filters.gender ?: ""
-        )
-        return parts.joinToString("|").hashCode().toString()
+
+    private fun generateFilterKey(filters: CharacterFilters): String {
+        return listOf(
+            "name=${filters.name.orEmpty().trim()}",
+            "status=${filters.status.orEmpty().trim()}",
+            "species=${filters.species.orEmpty().trim()}",
+            "type=${filters.type.orEmpty().trim()}",
+            "gender=${filters.gender.orEmpty().trim()}"
+        ).joinToString("&")
     }
-    
+
     private fun StoredCharacterEntity.toCharacter() = Character(
         id = id,
         name = name,

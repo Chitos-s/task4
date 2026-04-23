@@ -1,7 +1,6 @@
 package com.example.ramapp.data.db.entity
 
 import androidx.room.Entity
-import androidx.room.PrimaryKey
 
 @Entity(
     tableName = "stored_characters",
@@ -19,6 +18,6 @@ data class StoredCharacterEntity(
     val locationName: String,
     val episodeCount: Int,
     val filterHash: String,
-    val page: Int, // Номер страницы, на которой был этот персонаж
+    val page: Int,
     val storedAt: Long = System.currentTimeMillis()
 )

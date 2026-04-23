@@ -70,7 +70,6 @@ fun CharacterGridScreen(
             .fillMaxSize()
             .background(BlueGray50)
     ) {
-        // Header
         Column(modifier = Modifier.padding(12.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -90,7 +89,6 @@ fun CharacterGridScreen(
 
             Spacer(modifier = Modifier.height(6.dp))
 
-            // Status Filter
             Text(
                 text = "Status",
                 style = MaterialTheme.typography.labelSmall
@@ -123,7 +121,6 @@ fun CharacterGridScreen(
 
             Spacer(modifier = Modifier.height(4.dp))
 
-            // Gender Filter
             Text(
                 text = "Gender",
                 style = MaterialTheme.typography.labelSmall
@@ -241,7 +238,6 @@ fun CharacterGridScreen(
             }
         }
 
-        // Content
         when (listState) {
             ListUiState.Loading -> {
                 Column(
@@ -269,6 +265,21 @@ fun CharacterGridScreen(
                     Button(onClick = onRetry) {
                         Text(text = "Retry")
                     }
+                }
+            }
+
+            ListUiState.Empty -> {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .weight(1f),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "Ничего не найдено",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
                 }
             }
 
